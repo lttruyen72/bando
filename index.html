@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Bản đồ số từ Supabase - Leaflet</title>
+    <title>Bản đồ Ranh giới rg-ttvt</title>
     
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -16,101 +16,122 @@
             padding: 0;
             width: 100%;
             height: 100%;
+            font-family: Arial, sans-serif;
         }
         #map {
             width: 100%;
-            height: 100vh; /* Bản đồ tràn toàn màn hình */
+            height: 100vh;
         }
         .loading-pane {
             position: absolute;
             top: 10px; right: 10px;
             background: rgba(255, 255, 255, 0.9);
-            padding: 10px; border-radius: 5px;
-            z-index: 1000; font-family: Arial, sans-serif;
+            padding: 10px 15px; border-radius: 5px;
+            z-index: 1000;
             box-shadow: 0 0 10px rgba(0,0,0,0.2);
+            font-size: 14px;
+            font-weight: bold;
+            color: #2c3e50;
         }
     </style>
 </head>
 <body>
 
-    <div id="loading" class="loading-pane">Đang tải dữ liệu bản đồ...</div>
+    <div id="loading" class="loading-pane">Đang kết nối Supabase và tải bản đồ...</div>
     <div id="map"></div>
 
     <script>
-        // 3. Cấu hình Supabase (Thay thông số của bạn tại đây)
+        // 1. Điền chính xác thông tin dự án Supabase của bạn
         const SUPABASE_URL = 'https://nbxzgfindvtcwxqlnkag.supabase.co';
-        const SUPABASE_ANON_KEY = 'sb_publishable_ZSjTOn9EAuArh3yLkSqo3w_U1ltcTAX';
-       const supabase = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+        const SUPABASE_ANON_KEY = 'sb_publishable_ZSjTOn9EAuArh3yLkSqo3w_U1ltcTAX'; // Sử dụng Publishable Key ở Frontend
 
-        // 4. Khởi tạo Bản đồ Leaflet, mặc định tâm ở TP.HCM
+        // 2. Khởi tạo Supabase Client (Chỉ khai báo DUY NHẤT một lần để tránh lỗi "already been declared")
+        const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+        // 3. Khởi tạo Bản đồ Leaflet, mặc định lấy trung tâm tại TP.HCM
         const map = L.map('map').setView([10.762622, 106.660172], 11);
 
-        // Thêm lớp Bản đồ nền (OpenStreetMap)
+        // Thêm lớp Bản đồ nền vệ tinh/đường phố đường bộ dễ nhìn
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
             attribution: '© OpenStreetMap contributors'
         }).addTo(map);
 
-        // 5. Hàm lấy dữ liệu và hiển thị lên bản đồ
+        // 4. Hàm tải dữ liệu không gian từ bảng rg-ttvt
         async function loadMapData() {
-            // Truy vấn cột thông tin và cột tọa độ hình học (geom) từ bảng rg-ttvt
-            // Ở đây ta dùng hàm ST_AsGeoJSON(geom) của PostGIS để chuyển tọa độ Postgres thành mã GeoJSON cho Leaflet đọc
-            const { data, error } = await supabase
+            const loadingDiv = document.getElementById('loading');
+            
+            // Lấy toàn bộ các trường, Supabase sẽ tự động trả geom về cấu trúc GeoJSON nếu bảng đã kích hoạt PostGIS
+            const { data, error } = await supabaseClient
                 .from('rg-ttvt')
-                .select('*, geojson:geom'); // Hoặc select('id, name, geom') tùy thuộc vào các cột bạn có khi import
+                .select('*');
 
             if (error) {
-                console.error('Lỗi lấy dữ liệu:', error);
-                document.getElementById('loading').innerText = 'Lỗi tải dữ liệu!';
+                console.error('Lỗi lấy dữ liệu từ Supabase:', error);
+                loadingDiv.innerHTML = `<span style="color:red;">Lỗi kết nối: ${error.message}</span>`;
                 return;
             }
 
-            if (data && data.length > 0) {
-                // Tạo một mảng lưu trữ các tính năng GeoJSON
-                const geojsonFeatures = [];
-
-                data.forEach(item => {
-                    // Nếu dữ liệu geom được trả về dưới dạng Object GeoJSON sẵn từ Supabase
-                    if (item.geojson) {
-                        geojsonFeatures.push({
-                            "type": "Feature",
-                            "geometry": typeof item.geojson === 'string' ? JSON.parse(item.geojson) : item.geojson,
-                            "properties": {
-                                "id": item.id,
-                                "name": item.name || item.ten || "Đối tượng không tên"
-                                // Bạn có thể thêm các thuộc tính khác của bảng vào đây để hiển thị khi click
-                            }
-                        });
-                    }
-                });
-
-                // Tạo đối tượng GeoJSON hoàn chỉnh
-                const geojsonLayerData = {
-                    "type": "FeatureCollection",
-                    "features": geojsonFeatures
-                };
-
-                // Vẽ dữ liệu GeoJSON lên bản đồ Leaflet
-                const geoLayer = L.geoJSON(geojsonLayerData, {
-                    style: function (feature) {
-                        return { color: "#2ecc71", weight: 3, opacity: 0.8, fillOpacity: 0.4 }; // Cấu hình màu sắc cho Vùng/Đường
-                    },
-                    onEachFeature: function (feature, layer) {
-                        // Thêm bong bóng thông tin (Popup) khi bấm vào đối tượng
-                        if (feature.properties && feature.properties.name) {
-                            layer.bindPopup(`<b>Thông tin:</b> ${feature.properties.name}`);
-                        }
-                    }
-                }).addTo(map);
-
-                // Tự động thu phóng bản đồ vừa vặn với toàn bộ vùng dữ liệu được tải lên
-                map.fitBounds(geoLayer.getBounds());
+            if (!data || data.length === 0) {
+                loadingDiv.innerText = 'Bảng dữ liệu rg-ttvt trống hoặc chưa cấu hình RLS Policy!';
+                return;
             }
 
-            // Ẩn bảng thông báo đang tải
-            document.getElementById('loading').style.display = 'none';
+            const geojsonFeatures = [];
+
+            data.forEach(item => {
+                // Xác định cột chứa dữ liệu hình học (Thường QGIS tạo mặc định tên là 'geom' hoặc 'geometry')
+                const geometryData = item.geom || item.geometry;
+
+                if (geometryData) {
+                    geojsonFeatures.push({
+                        "type": "Feature",
+                        "geometry": typeof geometryData === 'string' ? JSON.parse(geometryData) : geometryData,
+                        "properties": {
+                            // Lấy các thuộc tính chữ để hiển thị popup khi click (Ví dụ: tên vùng, mã vùng)
+                            "name": item.name || item.ten || item.title || `Đối tượng #${item.id}`
+                        }
+                    });
+                }
+            });
+
+            if (geojsonFeatures.length === 0) {
+                loadingDiv.innerText = 'Tìm thấy dữ liệu nhưng không có cột tọa độ không gian hợp lệ!';
+                return;
+            }
+
+            // Tạo cấu trúc FeatureCollection hoàn chỉnh đúng chuẩn Leaflet
+            const geojsonLayerData = {
+                "type": "FeatureCollection",
+                "features": geojsonFeatures
+            };
+
+            // Vẽ các lớp ranh giới lên bản đồ
+            const geoLayer = L.geoJSON(geojsonLayerData, {
+                style: function (feature) {
+                    return { 
+                        color: "#3498db",      // Màu đường ranh giới (Xanh dương)
+                        weight: 2,             // Độ dày đường nét
+                        opacity: 0.8, 
+                        fillColor: "#3498db",  // Màu tô bên trong vùng
+                        fillOpacity: 0.2       // Độ trong suốt của màu nền vùng
+                    };
+                },
+                onEachFeature: function (feature, layer) {
+                    // Hiển thị Popup thông tin khi người dùng click vào một vùng ranh giới trên bản đồ
+                    if (feature.properties && feature.properties.name) {
+                        layer.bindPopup(`<strong>Thông tin vùng:</strong> ${feature.properties.name}`);
+                    }
+                }
+            }).addTo(map);
+
+            // Tự động căn chỉnh màn hình bản đồ vừa vặn với toàn bộ các ranh giới thu thập được
+            map.fitBounds(geoLayer.getBounds());
+
+            // Ẩn bảng thông báo trạng thái
+            loadingDiv.style.display = 'none';
         }
 
-        // Chạy hàm tải bản đồ
+        // Chạy tiến trình tải dữ liệu
         loadMapData();
     </script>
 </body>
